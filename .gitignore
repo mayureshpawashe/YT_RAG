@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/
+
+# Database folder
+chroma_db/
+
+# Data folder
+data/
+
+# Virtual environment
+venv/
+
+# Environment variables
+.env
+
+# Google OAuth secrets
+client_secret.json
+token.pickle
