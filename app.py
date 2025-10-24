@@ -243,12 +243,7 @@ You can now ask questions about this video!"""
                         outputs=[stats_output]
                     )
             
-            gr.Markdown(
-                """
-                ---
-                **Built with:** OpenAI GPT, ChromaDB, LangChain, Gradio
-                """
-            )
+            
         
         print("\n" + "="*80)
         print("🚀 LAUNCHING GRADIO INTERFACE")

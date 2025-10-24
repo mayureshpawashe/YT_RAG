@@ -1,20 +1,31 @@
+import os
 import chromadb
+import shutil
 from chromadb.config import Settings
-from typing import List, Optional
-from langchain_openai import OpenAIEmbeddings
+from typing import List, Dict, Any
 from config import Config
+from llm_wrapper import LLMWrapper
 
 class VectorStore:
     """Manage ChromaDB operations for storing and retrieving embeddings"""
     
     def __init__(self):
         """Initialize ChromaDB client and embeddings"""
-        self.embedding_function = OpenAIEmbeddings(
-            openai_api_key=Config.OPENAI_API_KEY,
-            model=Config.EMBEDDING_MODEL
-        )
+        self.llm_wrapper = LLMWrapper()
         
-        # Initialize ChromaDB client with persistent storage
+        # Clean up existing DB if dimensions mismatch
+        try:
+            self._initialize_db()
+        except Exception as e:
+            if "dimension" in str(e).lower():
+                print("⚠️ Embedding dimension mismatch detected. Resetting database...")
+                self.cleanup_db()
+                self._initialize_db()
+            else:
+                raise e
+    
+    def _initialize_db(self):
+        """Initialize ChromaDB with correct settings"""
         self.client = chromadb.PersistentClient(
             path=Config.CHROMA_DB_PATH,
             settings=Settings(
@@ -23,23 +34,32 @@ class VectorStore:
             )
         )
         
-        # Get or create collection
+        # Get or create collection with explicit dimension
         self.collection = self.client.get_or_create_collection(
             name=Config.COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
+            metadata={
+                "hnsw:space": "cosine",
+                "dimension": 384  # Explicitly set dimension for all-MiniLM-L6-v2
+            }
         )
         
         print(f"✓ ChromaDB initialized at: {Config.CHROMA_DB_PATH}")
         print(f"  Collection: {Config.COLLECTION_NAME}")
         print(f"  Current documents: {self.collection.count()}")
     
-    def add_documents(self, documents: List[dict], video_id: str) -> int:
+    def cleanup_db(self):
+        """Remove existing ChromaDB files"""
+        if os.path.exists(Config.CHROMA_DB_PATH):
+            shutil.rmtree(Config.CHROMA_DB_PATH)
+            print(f"✓ Removed existing database at {Config.CHROMA_DB_PATH}")
+    
+    def add_documents(self, documents: List[Dict[str, Any]], video_id: str) -> int:
         """
         Add documents to vector store
         
         Args:
-            documents: List of document dictionaries with 'text' field
-            video_id: YouTube video ID for metadata
+            documents: List of document dictionaries with 'text' and optional metadata
+            video_id: YouTube video ID for document grouping
             
         Returns:
             Number of documents added
@@ -49,9 +69,9 @@ class VectorStore:
         
         texts = [doc['text'] for doc in documents]
         
-        # Generate embeddings
+        # Generate embeddings using sentence transformers
         print(f"Generating embeddings for {len(texts)} chunks...")
-        embeddings = self.embedding_function.embed_documents(texts)
+        embeddings = self.llm_wrapper.get_embeddings(texts)
         
         # Prepare metadata
         metadatas = []
@@ -82,25 +102,25 @@ class VectorStore:
         
         return len(documents)
     
-    def similarity_search(self, query: str, k: int = None) -> List[dict]:
+    def similarity_search(self, query: str, k: int = None) -> List[Dict[str, Any]]:
         """
         Search for similar documents
         
         Args:
-            query: Search query
-            k: Number of results to return
+            query: Search query string
+            k: Number of results to return (default: Config.TOP_K_RESULTS)
             
         Returns:
-            List of relevant documents with metadata and scores
+            List of dictionaries containing matched documents and metadata
         """
         k = k or Config.TOP_K_RESULTS
         
         # Generate query embedding
-        query_embedding = self.embedding_function.embed_query(query)
+        query_embedding = self.llm_wrapper.get_embeddings(query)
         
         # Search in ChromaDB
         results = self.collection.query(
-            query_embeddings=[query_embedding],
+            query_embeddings=query_embedding,
             n_results=k,
             include=['documents', 'metadatas', 'distances']
         )
@@ -114,24 +134,28 @@ class VectorStore:
                     'text': results['documents'][0][i],
                     'metadata': results['metadatas'][0][i],
                     'distance': results['distances'][0][i],
-                    'similarity': 1 - results['distances'][0][i]  # Convert distance to similarity
+                    'similarity': 1 - results['distances'][0][i]
                 }
                 formatted_results.append(result)
         
         return formatted_results
     
-    def get_collection_stats(self) -> dict:
-        """Get statistics about the collection"""
+    def get_collection_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the collection
+        
+        Returns:
+            Dictionary containing collection statistics
+        """
         count = self.collection.count()
         
         stats = {
             'total_documents': count,
             'collection_name': Config.COLLECTION_NAME,
-            'db_path': Config.CHROMA_DB_PATH
+            'db_path': str(Config.CHROMA_DB_PATH)
         }
         
         if count > 0:
-            # Get sample to check video sources
             sample = self.collection.get(limit=min(count, 100))
             video_ids = set()
             
@@ -150,12 +174,11 @@ class VectorStore:
         Delete all chunks for a specific video
         
         Args:
-            video_id: YouTube video ID
+            video_id: YouTube video ID to delete
             
         Returns:
             Number of documents deleted
         """
-        # Get all IDs for this video
         results = self.collection.get(
             where={"video_id": video_id}
         )
@@ -170,10 +193,13 @@ class VectorStore:
         return 0
     
     def reset_collection(self):
-        """Delete all documents from collection"""
+        """Delete all documents from collection and recreate it"""
         self.client.delete_collection(name=Config.COLLECTION_NAME)
         self.collection = self.client.create_collection(
             name=Config.COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
+            metadata={
+                "hnsw:space": "cosine",
+                "dimension": 384  # Explicitly set dimension for all-MiniLM-L6-v2
+            }
         )
         print("✓ Collection reset successfully")

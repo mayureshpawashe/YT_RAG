@@ -1,6 +1,5 @@
 from typing import List, Optional, Tuple
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from llm_wrapper import LLMWrapper
 from vector_store import VectorStore
 from config import Config
 
@@ -9,12 +8,7 @@ class RAGEngine:
     
     def __init__(self):
         """Initialize RAG engine with LLM and vector store"""
-        self.llm = ChatOpenAI(
-            openai_api_key=Config.OPENAI_API_KEY,
-            model_name=Config.MODEL_NAME,
-            temperature=0.7
-        )
-        
+        self.llm = LLMWrapper()
         self.vector_store = VectorStore()
         
         # Define system prompt
@@ -34,23 +28,12 @@ Context from video transcripts:
         print("✓ RAG Engine initialized")
     
     def retrieve_context(self, query: str, k: int = None) -> Tuple[str, List[dict]]:
-        """
-        Retrieve relevant context for a query
-        
-        Args:
-            query: User question
-            k: Number of documents to retrieve
-            
-        Returns:
-            Tuple of (formatted_context, source_documents)
-        """
-        # Search vector store
+        """Retrieve relevant context for a query"""
         results = self.vector_store.similarity_search(query, k=k)
         
         if not results:
             return "", []
         
-        # Format context
         context_parts = []
         for i, result in enumerate(results, 1):
             video_id = result['metadata'].get('video_id', 'unknown')
@@ -58,43 +41,18 @@ Context from video transcripts:
             context_parts.append(f"[Source {i} - Video: {video_id}]\n{text}")
         
         formatted_context = "\n\n---\n\n".join(context_parts)
-        
         return formatted_context, results
     
     def generate_answer(self, query: str, context: str) -> str:
-        """
-        Generate answer using LLM
-        
-        Args:
-            query: User question
-            context: Retrieved context
-            
-        Returns:
-            Generated answer
-        """
-        # Create messages
+        """Generate answer using LLM"""
         messages = [
-            SystemMessage(content=self.system_prompt.format(context=context)),
-            HumanMessage(content=query)
+            {"role": "system", "content": self.system_prompt.format(context=context)},
+            {"role": "user", "content": query}
         ]
-        
-        # Generate response
-        response = self.llm.invoke(messages)
-        
-        return response.content
+        return self.llm.get_completion(messages)
     
     def query(self, question: str, include_sources: bool = True) -> dict:
-        """
-        Main query method - retrieve and generate answer
-        
-        Args:
-            question: User question
-            include_sources: Whether to include source documents
-            
-        Returns:
-            Dictionary with answer and optional sources
-        """
-        # Check if collection has documents
+        """Main query method - retrieve and generate answer"""
         stats = self.vector_store.get_collection_stats()
         if stats['total_documents'] == 0:
             return {
@@ -102,7 +60,6 @@ Context from video transcripts:
                 'sources': []
             }
         
-        # Retrieve context
         context, sources = self.retrieve_context(question)
         
         if not context:
@@ -111,9 +68,7 @@ Context from video transcripts:
                 'sources': []
             }
         
-        # Generate answer
         answer = self.generate_answer(question, context)
-        
         result = {'answer': answer}
         
         if include_sources:
@@ -131,14 +86,6 @@ Context from video transcripts:
         return result
     
     def chat(self, question: str) -> str:
-        """
-        Simple chat method that returns just the answer
-        
-        Args:
-            question: User question
-            
-        Returns:
-            Answer string
-        """
+        """Simple chat method that returns just the answer"""
         result = self.query(question, include_sources=False)
         return result['answer']

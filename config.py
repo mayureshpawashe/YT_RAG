@@ -7,10 +7,19 @@ load_dotenv()
 class Config:
     """Configuration class for the YouTube RAG Chatbot"""
     
-    # OpenAI Configuration
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    MODEL_NAME = os.getenv("MODEL_NAME")
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
+    # Groq settings
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not found in environment variables")
+    
+    # Model settings
+    LLM_MODEL = "openai/gpt-oss-120b"  # Groq's model
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    
+    # LLM parameters
+    TEMPERATURE = 0.7
+    MAX_TOKENS = 8192
+    REASONING_EFFORT = "medium"
     
     # ChromaDB Configuration
     CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
@@ -29,8 +38,8 @@ class Config:
     @staticmethod
     def validate():
         """Validate required configuration"""
-        if not Config.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        if not Config.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY not found in environment variables")
         
         # Create necessary directories
         os.makedirs(Config.TRANSCRIPTS_DIR, exist_ok=True)

@@ -9,7 +9,5 @@ youtube-transcript-api
 gradio
 python-dotenv
 tiktoken
-google-api-python-client 
-oauth2client
-google-auth-httplib2
-google-auth-oauthlib
+groq
+sentence-transformers
