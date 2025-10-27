@@ -1,205 +1,158 @@
 import os
-import chromadb
+import time
 import shutil
+import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Any
 from config import Config
 from llm_wrapper import LLMWrapper
 
+
 class VectorStore:
     """Manage ChromaDB operations for storing and retrieving embeddings"""
-    
+
     def __init__(self):
-        """Initialize ChromaDB client and embeddings"""
         self.llm_wrapper = LLMWrapper()
-        
-        # Clean up existing DB if dimensions mismatch
+
+        # Each run uses a unique folder (defined in config)
+        self.ensure_db_path_exists()
+        self._initialize_db()
+
+    def ensure_db_path_exists(self):
+        """Ensure DB folder exists with writable permissions"""
+        os.makedirs(Config.CHROMA_DB_PATH, exist_ok=True)
+
+        # Fix permissions if necessary
         try:
-            self._initialize_db()
+            os.chmod(Config.CHROMA_DB_PATH, 0o777)
         except Exception as e:
-            if "dimension" in str(e).lower():
-                print("⚠️ Embedding dimension mismatch detected. Resetting database...")
-                self.cleanup_db()
-                self._initialize_db()
-            else:
-                raise e
-    
+            print(f"⚠️ Could not chmod folder: {e}")
+
+        time.sleep(0.3)  # give filesystem time to settle
+
+        if not os.access(Config.CHROMA_DB_PATH, os.W_OK):
+            raise PermissionError(f"🚫 Path not writable: {Config.CHROMA_DB_PATH}")
+
+        print(f"📁 Chroma DB directory ready: {Config.CHROMA_DB_PATH}")
+
     def _initialize_db(self):
-        """Initialize ChromaDB with correct settings"""
+        """Initialize ChromaDB client"""
+        print(f"🚀 Initializing Chroma at: {Config.CHROMA_DB_PATH}")
+
         self.client = chromadb.PersistentClient(
             path=Config.CHROMA_DB_PATH,
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
+            settings=Settings(anonymized_telemetry=False, allow_reset=True)
         )
-        
-        # Get or create collection with explicit dimension
+
         self.collection = self.client.get_or_create_collection(
             name=Config.COLLECTION_NAME,
-            metadata={
-                "hnsw:space": "cosine",
-                "dimension": 384  # Explicitly set dimension for all-MiniLM-L6-v2
-            }
+            metadata={"hnsw:space": "cosine", "dimension": 384}
         )
-        
-        print(f"✓ ChromaDB initialized at: {Config.CHROMA_DB_PATH}")
-        print(f"  Collection: {Config.COLLECTION_NAME}")
-        print(f"  Current documents: {self.collection.count()}")
-    
-    def cleanup_db(self):
-        """Remove existing ChromaDB files"""
-        if os.path.exists(Config.CHROMA_DB_PATH):
-            shutil.rmtree(Config.CHROMA_DB_PATH)
-            print(f"✓ Removed existing database at {Config.CHROMA_DB_PATH}")
-    
+
+        print(f"✅ Fresh ChromaDB ready at: {Config.CHROMA_DB_PATH}")
+        print(f"   Collection: {Config.COLLECTION_NAME}")
+        print(f"   Docs: {self.collection.count()}")
+
     def add_documents(self, documents: List[Dict[str, Any]], video_id: str) -> int:
-        """
-        Add documents to vector store
-        
-        Args:
-            documents: List of document dictionaries with 'text' and optional metadata
-            video_id: YouTube video ID for document grouping
-            
-        Returns:
-            Number of documents added
-        """
+        """Add documents (chunks) to Chroma collection"""
         if not documents:
             raise ValueError("No documents to add")
-        
-        texts = [doc['text'] for doc in documents]
-        
-        # Generate embeddings using sentence transformers
-        print(f"Generating embeddings for {len(texts)} chunks...")
+
+        texts = [doc["text"] for doc in documents]
+        print(f"🧠 Generating embeddings for {len(texts)} chunks...")
         embeddings = self.llm_wrapper.get_embeddings(texts)
-        
-        # Prepare metadata
-        metadatas = []
-        ids = []
-        
+
+        ids, metadatas = [], []
         for i, doc in enumerate(documents):
-            doc_id = f"{video_id}_chunk_{i}"
-            metadata = {
-                'video_id': video_id,
-                'chunk_id': doc.get('chunk_id', i),
-                'chunk_size': doc.get('chunk_size', len(doc['text'])),
-                'source': doc.get('url', f"https://www.youtube.com/watch?v={video_id}")
-            }
-            
-            ids.append(doc_id)
-            metadatas.append(metadata)
-        
-        # Add to ChromaDB
-        self.collection.add(
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids
-        )
-        
-        print(f"✓ Added {len(documents)} documents to ChromaDB")
-        print(f"  Total documents in collection: {self.collection.count()}")
-        
+            ids.append(f"{video_id}_chunk_{i}")
+            metadatas.append({
+                "video_id": video_id,
+                "chunk_id": i,
+                "chunk_size": len(doc["text"]),
+                "source": f"https://www.youtube.com/watch?v={video_id}"
+            })
+
+        try:
+            self.collection.add(
+                embeddings=embeddings,
+                documents=texts,
+                metadatas=metadatas,
+                ids=ids
+            )
+        except Exception as e:
+            print(f"❌ Error adding documents: {e}")
+            raise
+
+        print(f"✅ Added {len(documents)} docs. Total: {self.collection.count()}")
         return len(documents)
-    
+
     def similarity_search(self, query: str, k: int = None) -> List[Dict[str, Any]]:
-        """
-        Search for similar documents
-        
-        Args:
-            query: Search query string
-            k: Number of results to return (default: Config.TOP_K_RESULTS)
-            
-        Returns:
-            List of dictionaries containing matched documents and metadata
-        """
+        """Search for relevant chunks"""
         k = k or Config.TOP_K_RESULTS
-        
-        # Generate query embedding
         query_embedding = self.llm_wrapper.get_embeddings(query)
-        
-        # Search in ChromaDB
         results = self.collection.query(
             query_embeddings=query_embedding,
             n_results=k,
             include=['documents', 'metadatas', 'distances']
         )
-        
-        # Format results
-        formatted_results = []
-        
+
+        formatted = []
         if results['documents'] and results['documents'][0]:
             for i in range(len(results['documents'][0])):
-                result = {
+                formatted.append({
                     'text': results['documents'][0][i],
                     'metadata': results['metadatas'][0][i],
                     'distance': results['distances'][0][i],
                     'similarity': 1 - results['distances'][0][i]
-                }
-                formatted_results.append(result)
-        
-        return formatted_results
-    
+                })
+        return formatted
+
     def get_collection_stats(self) -> Dict[str, Any]:
-        """
-        Get statistics about the collection
-        
-        Returns:
-            Dictionary containing collection statistics
-        """
-        count = self.collection.count()
-        
-        stats = {
-            'total_documents': count,
-            'collection_name': Config.COLLECTION_NAME,
-            'db_path': str(Config.CHROMA_DB_PATH)
-        }
-        
-        if count > 0:
-            sample = self.collection.get(limit=min(count, 100))
-            video_ids = set()
-            
-            if sample['metadatas']:
-                for metadata in sample['metadatas']:
-                    if 'video_id' in metadata:
-                        video_ids.add(metadata['video_id'])
-            
-            stats['unique_videos'] = len(video_ids)
-            stats['video_ids'] = list(video_ids)
-        
-        return stats
-    
+        """Return Chroma collection statistics for UI"""
+        try:
+            count = self.collection.count()
+            stats = {
+                "total_documents": count,
+                "collection_name": Config.COLLECTION_NAME,
+                "db_path": str(Config.CHROMA_DB_PATH),
+            }
+
+            if count > 0:
+                sample = self.collection.get(limit=min(count, 100))
+                video_ids = {m.get("video_id") for m in sample["metadatas"] if "video_id" in m}
+                stats["unique_videos"] = len(video_ids)
+                stats["video_ids"] = list(video_ids)
+            else:
+                stats["unique_videos"] = 0
+                stats["video_ids"] = []
+
+            return stats
+        except Exception as e:
+            print(f"⚠️ Could not fetch collection stats: {e}")
+            return {
+                "total_documents": 0,
+                "collection_name": Config.COLLECTION_NAME,
+                "db_path": str(Config.CHROMA_DB_PATH),
+                "unique_videos": 0,
+                "video_ids": []
+            }
+
     def delete_video(self, video_id: str) -> int:
-        """
-        Delete all chunks for a specific video
-        
-        Args:
-            video_id: YouTube video ID to delete
-            
-        Returns:
-            Number of documents deleted
-        """
-        results = self.collection.get(
-            where={"video_id": video_id}
-        )
-        
+        """Delete all chunks belonging to a given YouTube video"""
+        results = self.collection.get(where={"video_id": video_id})
         if results['ids']:
             self.collection.delete(ids=results['ids'])
             count = len(results['ids'])
-            print(f"✓ Deleted {count} documents for video: {video_id}")
+            print(f"🗑 Deleted {count} docs for video: {video_id}")
             return count
-        
-        print(f"No documents found for video: {video_id}")
+        print(f"No docs found for {video_id}")
         return 0
-    
+
     def reset_collection(self):
-        """Delete all documents from collection and recreate it"""
+        """Completely reset collection"""
         self.client.delete_collection(name=Config.COLLECTION_NAME)
         self.collection = self.client.create_collection(
             name=Config.COLLECTION_NAME,
-            metadata={
-                "hnsw:space": "cosine",
-                "dimension": 384  # Explicitly set dimension for all-MiniLM-L6-v2
-            }
+            metadata={"hnsw:space": "cosine", "dimension": 384}
         )
-        print("✓ Collection reset successfully")
+        print("🔄 Collection reset successfully")
