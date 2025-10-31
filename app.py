@@ -2,13 +2,19 @@ import gradio as gr
 from chatbot import YouTubeChatbot
 from typing import List, Tuple
 import traceback
+from db_cleanup import DBCleanupManager
+from config import Config
 
 class GradioApp:
     """Gradio web interface for YouTube RAG Chatbot"""
     
     def __init__(self):
-        """Initialize chatbot"""
+        """Initialize chatbot and cleanup manager"""
         self.chatbot = YouTubeChatbot()
+        self.cleanup_manager = DBCleanupManager(
+            Config.BASE_DB_DIR,
+            Config.RUN_ID
+        )
     
     def add_video_ui(self, video_url: str, progress=gr.Progress()) -> str:
         """
@@ -99,6 +105,103 @@ You can now ask questions about this video!"""
     def clear_chat(self) -> Tuple[List, str]:
         """Clear chat history"""
         return [], ""
+    
+    def get_storage_stats_ui(self) -> str:
+        """Get storage statistics for UI"""
+        try:
+            stats = self.cleanup_manager.get_storage_stats()
+            
+            output = f"""📊 **Database Storage Statistics**
+
+📁 Total Runs: {stats['total_runs']}
+💾 Total Size: {stats['total_size_human']}
+🔄 Current Run: {stats['current_run']}
+
+"""
+            
+            if stats['runs']:
+                output += "**All Runs:**\n\n"
+                output += "| Run ID | Size | Age | Status |\n"
+                output += "|--------|------|-----|--------|\n"
+                
+                for run in stats['runs']:
+                    current_marker = "⭐ CURRENT" if run['is_current'] else ""
+                    age_str = f"{run['age_days']:.1f} days"
+                    output += f"| `{run['run_id']}` | {run['size_human']} | {age_str} | {current_marker} |\n"
+            else:
+                output += "*No database runs found.*\n"
+            
+            output += f"\n**Retention Policy:** {Config.CLEANUP_RETENTION_MODE}\n"
+            output += f"- Keep runs from last {Config.CLEANUP_RETENTION_DAYS} days\n"
+            output += f"- Keep last {Config.CLEANUP_RETENTION_COUNT} runs\n"
+            
+            return output
+            
+        except Exception as e:
+            return f"❌ Error fetching storage stats: {str(e)}\n\n{traceback.format_exc()}"
+    
+    def cleanup_preview_ui(self) -> str:
+        """Preview what will be deleted"""
+        try:
+            result = self.cleanup_manager.cleanup_old_runs(dry_run=True)
+            
+            if result['deleted_count'] == 0:
+                return "✅ No runs to delete based on current retention policy.\n\nAll runs are within the retention period."
+            
+            output = f"""🧹 **Cleanup Preview**
+
+Will delete **{result['deleted_count']} run(s)**:
+
+"""
+            for run_id in result['deleted_runs']:
+                output += f"  • `{run_id}`\n"
+            
+            output += f"\n💾 **Space to be freed:** {result['space_freed_human']}\n"
+            output += "\n⚠️ Click 'Confirm Cleanup' below to proceed with deletion."
+            
+            return output
+            
+        except Exception as e:
+            return f"❌ Error previewing cleanup: {str(e)}\n\n{traceback.format_exc()}"
+    
+    def cleanup_execute_ui(self, progress=gr.Progress()) -> str:
+        """Execute cleanup"""
+        try:
+            progress(0, desc="Starting cleanup...")
+            
+            # First check if there's anything to delete
+            preview = self.cleanup_manager.cleanup_old_runs(dry_run=True)
+            if preview['deleted_count'] == 0:
+                return "✅ No runs to delete. All runs are within retention policy."
+            
+            progress(0.3, desc=f"Deleting {preview['deleted_count']} run(s)...")
+            
+            # Execute cleanup
+            result = self.cleanup_manager.cleanup_old_runs(dry_run=False)
+            
+            progress(1.0, desc="Complete!")
+            
+            output = f"""✅ **Cleanup Complete!**
+
+📊 Deleted: {result['deleted_count']} run(s)
+💾 Space freed: {result['space_freed_human']}
+
+"""
+            
+            if result['deleted_runs']:
+                output += "**Deleted runs:**\n"
+                for run_id in result['deleted_runs']:
+                    output += f"  • `{run_id}`\n"
+            
+            if result['errors']:
+                output += f"\n⚠️ **Errors encountered:** {len(result['errors'])}\n"
+                for error in result['errors']:
+                    output += f"  • `{error['run_id']}`: {error['error']}\n"
+            
+            return output
+            
+        except Exception as e:
+            return f"❌ Error during cleanup: {str(e)}\n\n{traceback.format_exc()}"
     
     def launch(self, share: bool = False):
         """Launch Gradio interface"""
@@ -241,6 +344,73 @@ You can now ask questions about this video!"""
                     demo.load(
                         fn=self.get_stats_ui,
                         outputs=[stats_output]
+                    )
+                
+                # Tab 4: Cleanup
+                with gr.Tab("🧹 Cleanup"):
+                    gr.Markdown("### Database Storage Management")
+                    
+                    gr.Markdown(
+                        """
+                        Manage old database runs to free up disk space. Each application run creates a new 
+                        timestamped database folder. Use this tab to view storage usage and clean up old runs.
+                        """
+                    )
+                    
+                    # Storage Stats Section
+                    with gr.Group():
+                        gr.Markdown("#### 📊 Storage Statistics")
+                        storage_stats_output = gr.Markdown()
+                        refresh_storage_btn = gr.Button("🔄 Refresh Storage Stats")
+                    
+                    gr.Markdown("---")
+                    
+                    # Cleanup Section
+                    with gr.Group():
+                        gr.Markdown("#### 🧹 Cleanup Old Runs")
+                        
+                        cleanup_preview_output = gr.Markdown()
+                        
+                        with gr.Row():
+                            preview_cleanup_btn = gr.Button("👁️ Preview Cleanup", variant="secondary")
+                            execute_cleanup_btn = gr.Button("✅ Confirm Cleanup", variant="primary")
+                        
+                        cleanup_result_output = gr.Markdown()
+                    
+                    gr.Markdown(
+                        """
+                        **How it works:**
+                        1. Click "Preview Cleanup" to see what will be deleted
+                        2. Review the list of runs to be deleted
+                        3. Click "Confirm Cleanup" to proceed with deletion
+                        
+                        **Retention Policy:**
+                        - The current run is always protected
+                        - Runs are kept based on configured retention settings
+                        - See CLEANUP.md for configuration details
+                        """
+                    )
+                    
+                    # Button actions
+                    refresh_storage_btn.click(
+                        fn=self.get_storage_stats_ui,
+                        outputs=[storage_stats_output]
+                    )
+                    
+                    preview_cleanup_btn.click(
+                        fn=self.cleanup_preview_ui,
+                        outputs=[cleanup_preview_output]
+                    )
+                    
+                    execute_cleanup_btn.click(
+                        fn=self.cleanup_execute_ui,
+                        outputs=[cleanup_result_output]
+                    )
+                    
+                    # Load storage stats on tab open
+                    demo.load(
+                        fn=self.get_storage_stats_ui,
+                        outputs=[storage_stats_output]
                     )
             
             

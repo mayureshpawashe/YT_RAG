@@ -1,8 +1,9 @@
 # Python cache
 __pycache__/
 
-# Database folder
+# Database folders
 chroma_db/
+chroma_db_runs/
 
 # Data folder
 data/

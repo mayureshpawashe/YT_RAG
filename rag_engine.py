@@ -36,9 +36,10 @@ Context from video transcripts:
         
         context_parts = []
         for i, result in enumerate(results, 1):
-            video_id = result['metadata'].get('video_id', 'unknown')
+            metadata = result.get('metadata') or {}
+            video_label = metadata.get('title') or metadata.get('video_id', 'unknown')
             text = result['text']
-            context_parts.append(f"[Source {i} - Video: {video_id}]\n{text}")
+            context_parts.append(f"[Source {i} - {video_label}]\n{text}")
         
         formatted_context = "\n\n---\n\n".join(context_parts)
         return formatted_context, results
@@ -74,10 +75,14 @@ Context from video transcripts:
         if include_sources:
             formatted_sources = []
             for i, source in enumerate(sources, 1):
+                metadata = source.get('metadata') or {}
+                video_label = metadata.get('title') or metadata.get('video_id')
                 formatted_sources.append({
                     'source_number': i,
-                    'video_id': source['metadata'].get('video_id'),
-                    'url': source['metadata'].get('source'),
+                    'video_id': metadata.get('video_id'),
+                    'title': metadata.get('title'),
+                    'display': video_label,
+                    'url': metadata.get('source'),
                     'similarity': round(source['similarity'], 3),
                     'text_preview': source['text'][:200] + "..." if len(source['text']) > 200 else source['text']
                 })

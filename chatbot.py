@@ -49,7 +49,8 @@ class YouTubeChatbot:
                 text=video_data['transcript'],
                 metadata={
                     'video_id': video_id,
-                    'url': video_data['url']
+                    'url': video_data['url'],
+                    "title": video_data["title"],
                 }
             )
             

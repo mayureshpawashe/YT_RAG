@@ -38,6 +38,12 @@ class Config:
     # === Data Storage ===
     TRANSCRIPTS_DIR = "./data/transcripts"
 
+    # === Cleanup Configuration ===
+    CLEANUP_ENABLED = os.getenv("CLEANUP_ENABLED", "true").lower() == "true"
+    CLEANUP_RETENTION_DAYS = int(os.getenv("CLEANUP_RETENTION_DAYS", 7))
+    CLEANUP_RETENTION_COUNT = int(os.getenv("CLEANUP_RETENTION_COUNT", 3))
+    CLEANUP_RETENTION_MODE = os.getenv("CLEANUP_RETENTION_MODE", "hybrid")  # "days", "count", "hybrid"
+
     @staticmethod
     def validate():
         """Validate required config and create necessary directories"""

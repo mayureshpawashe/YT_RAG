@@ -3,6 +3,7 @@ import re
 from typing import Optional, Dict
 from youtube_transcript_api import YouTubeTranscriptApi
 from config import Config
+import requests
 
 class YouTubeLoader:
     """Load and process YouTube video transcripts using youtube-transcript-api"""
@@ -31,6 +32,19 @@ class YouTubeLoader:
             return url
         
         return None
+
+    def fetch_video_title(self, video_id: str) -> str:
+            try:
+                resp = requests.get(
+                    "https://www.youtube.com/oembed",
+                    params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                return resp.json().get("title", video_id)
+            except Exception as exc:
+                print(f"⚠️ Could not fetch title for {video_id}: {exc}")
+                return video_id
 
     def get_transcript(self, video_url: str, languages: list = None) -> dict:
         """
@@ -68,6 +82,7 @@ class YouTubeLoader:
 
             # Fetch the full transcript data
             transcript_data = transcript.fetch()
+            title = self.fetch_video_title(video_id)
             
             # --- THIS IS THE FIX ---
             # Changed segment['text'] to segment.text
@@ -77,7 +92,7 @@ class YouTubeLoader:
             result = {
                 'video_id': video_id,
                 'url': f"https://www.youtube.com/watch?v={video_id}",
-                'title': video_id,  # Use video_id as title since this API doesn't fetch title
+                'title': title,  
                 'transcript': full_transcript,
                 'language': transcript.language_code
             }
@@ -90,6 +105,9 @@ class YouTubeLoader:
             
         except Exception as e:
             raise Exception(f"Error processing video {video_id}: {str(e)}")
+        
+    
+
 
     def save_transcript(self, video_data: dict):
         """Save transcript to a text file"""

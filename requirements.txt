@@ -11,3 +11,4 @@ python-dotenv
 tiktoken
 groq
 sentence-transformers
+requests

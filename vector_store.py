@@ -14,6 +14,18 @@ class VectorStore:
     def __init__(self):
         self.llm_wrapper = LLMWrapper()
 
+        # Cleanup old runs before initializing
+        if Config.CLEANUP_ENABLED:
+            from db_cleanup import DBCleanupManager
+            cleanup_manager = DBCleanupManager(
+                Config.BASE_DB_DIR,
+                Config.RUN_ID
+            )
+            result = cleanup_manager.cleanup_old_runs()
+            if result['deleted_count'] > 0:
+                print(f"🧹 Cleaned up {result['deleted_count']} old run(s) "
+                      f"({result['space_freed_human']} freed)")
+
         # Each run uses a unique folder (defined in config)
         self.ensure_db_path_exists()
         self._initialize_db()
@@ -67,6 +79,7 @@ class VectorStore:
             ids.append(f"{video_id}_chunk_{i}")
             metadatas.append({
                 "video_id": video_id,
+                "title": doc.get("title"),
                 "chunk_id": i,
                 "chunk_size": len(doc["text"]),
                 "source": f"https://www.youtube.com/watch?v={video_id}"
@@ -117,16 +130,36 @@ class VectorStore:
                 "db_path": str(Config.CHROMA_DB_PATH),
             }
 
-            if count > 0:
-                sample = self.collection.get(limit=min(count, 100))
-                video_ids = {m.get("video_id") for m in sample["metadatas"] if "video_id" in m}
-                stats["unique_videos"] = len(video_ids)
-                stats["video_ids"] = list(video_ids)
-            else:
+            if count == 0:
                 stats["unique_videos"] = 0
                 stats["video_ids"] = []
+                return stats
 
+            page_size = 200
+            video_ids = set()
+
+            for offset in range(0, count, page_size):
+                batch = self.collection.get(
+                    limit=page_size,
+                    offset=offset,
+                    include=["metadatas"]
+                )
+
+                metadatas = batch.get("metadatas") or []
+                for metadata in metadatas:
+                    if not metadata:
+                        continue
+                    video_id = metadata.get("video_id")
+                    if video_id:
+                        video_ids.add(video_id)
+
+                if not batch.get("ids"):
+                    break  # safety against unexpected empty pages
+
+            stats["unique_videos"] = len(video_ids)
+            stats["video_ids"] = sorted(video_ids)
             return stats
+
         except Exception as e:
             print(f"⚠️ Could not fetch collection stats: {e}")
             return {

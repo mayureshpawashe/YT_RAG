@@ -74,6 +74,24 @@ Examples:
         help='Create public link for Gradio UI (use with --ui)'
     )
     
+    parser.add_argument(
+        '--cleanup',
+        action='store_true',
+        help='Clean up old database runs'
+    )
+    
+    parser.add_argument(
+        '--cleanup-all',
+        action='store_true',
+        help='Delete all runs except current (requires confirmation)'
+    )
+    
+    parser.add_argument(
+        '--storage-stats',
+        action='store_true',
+        help='Show storage statistics for database runs'
+    )
+    
     args = parser.parse_args()
     
     # If no arguments provided, show help
@@ -82,6 +100,43 @@ Examples:
         return
     
     try:
+        # Handle cleanup commands (don't need chatbot initialization)
+        if args.cleanup or args.cleanup_all or args.storage_stats:
+            from db_cleanup import DBCleanupManager
+            from config import Config
+            
+            cleanup_manager = DBCleanupManager(
+                Config.BASE_DB_DIR,
+                Config.RUN_ID
+            )
+            
+            if args.storage_stats:
+                # Show storage statistics
+                stats = cleanup_manager.get_storage_stats()
+                print("\n" + "="*80)
+                print("DATABASE STORAGE STATISTICS")
+                print("="*80 + "\n")
+                print(f"📊 Total Runs: {stats['total_runs']}")
+                print(f"💾 Total Size: {stats['total_size_human']}")
+                print(f"🔄 Current Run: {stats['current_run']}\n")
+                
+                if stats['runs']:
+                    print("Runs:")
+                    print("-" * 80)
+                    for run in stats['runs']:
+                        current_marker = " ⭐ CURRENT" if run['is_current'] else ""
+                        age_str = f"{run['age_days']:.1f} days ago"
+                        print(f"  {run['run_id']} | {run['size_human']:>10} | {age_str:>15}{current_marker}")
+                    print("-" * 80)
+                
+                print("\n" + "="*80 + "\n")
+                return
+            
+            if args.cleanup or args.cleanup_all:
+                # Manual cleanup
+                result = cleanup_manager.manual_cleanup(delete_all=args.cleanup_all)
+                return
+        
         # Initialize chatbot
         chatbot = YouTubeChatbot()
         
